@@ -6,7 +6,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
-import { Calendar, Search, Download, Filter, RefreshCw } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Calendar, Search, Download, Filter, RefreshCw, FileText, Table as TableIcon } from "lucide-react";
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, ResponsiveContainer } from "recharts";
 
 // Mock data for audit logs
@@ -63,6 +64,86 @@ const mockAuditLogs = [
   }
 ];
 
+// Convert audit logs to FHIR AuditEvent format
+const convertToFHIRAuditEvent = (log: typeof mockAuditLogs[0]) => {
+  return {
+    resourceType: "AuditEvent",
+    id: log.id,
+    meta: {
+      versionId: "1",
+      lastUpdated: new Date(log.timestamp).toISOString()
+    },
+    type: {
+      system: "http://terminology.hl7.org/CodeSystem/audit-event-type",
+      code: log.action.toLowerCase(),
+      display: log.action
+    },
+    action: log.action.charAt(0).toUpperCase(),
+    period: {
+      start: new Date(log.timestamp).toISOString(),
+      end: new Date(log.timestamp).toISOString()
+    },
+    recorded: new Date(log.timestamp).toISOString(),
+    outcome: log.outcome === "Success" ? "0" : "8",
+    outcomeDesc: log.outcome,
+    agent: [
+      {
+        type: {
+          coding: [
+            {
+              system: "http://terminology.hl7.org/CodeSystem/extra-security-role-type",
+              code: "humanuser",
+              display: "human user"
+            }
+          ]
+        },
+        who: {
+          display: log.user
+        },
+        requestor: true
+      }
+    ],
+    source: {
+      site: "Health Information System",
+      observer: {
+        display: "SIH Audit System"
+      },
+      type: [
+        {
+          system: "http://terminology.hl7.org/CodeSystem/security-source-type",
+          code: "4",
+          display: "Application Server"
+        }
+      ]
+    },
+    entity: [
+      {
+        what: {
+          identifier: {
+            value: log.resourceId
+          }
+        },
+        type: {
+          system: "http://terminology.hl7.org/CodeSystem/audit-entity-type",
+          code: "2",
+          display: log.resourceType
+        },
+        role: {
+          system: "http://terminology.hl7.org/CodeSystem/object-role",
+          code: "1",
+          display: "Patient"
+        },
+        detail: [
+          {
+            type: "Description",
+            valueString: log.details
+          }
+        ]
+      }
+    ]
+  };
+};
+
 // Mock data for charts
 const actionTypeData = [
   { name: "Viewed", value: 45, color: "#3b82f6" },
@@ -102,6 +183,9 @@ export default function AuditLogs() {
   const [resourceType, setResourceType] = useState("all");
   const [outcome, setOutcome] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [viewMode, setViewMode] = useState<"table" | "json">("table");
+
+  const fhirAuditEvents = mockAuditLogs.map(convertToFHIRAuditEvent);
 
   const handleResetFilters = () => {
     setSearchQuery("");
@@ -110,18 +194,31 @@ export default function AuditLogs() {
     setResourceType("all");
     setOutcome("all");
     setCurrentPage(1);
+    setViewMode("table");
   };
 
   const handleExportLogs = () => {
-    // Mock export functionality
-    const csv = mockAuditLogs.map(log => 
-      `${log.timestamp},${log.user},${log.action},${log.resourceType},${log.resourceId},${log.outcome}`
-    ).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
+    let data: string;
+    let filename: string;
+    let mimeType: string;
+
+    if (viewMode === "json") {
+      data = JSON.stringify({ entry: fhirAuditEvents.map(event => ({ resource: event })) }, null, 2);
+      filename = "audit-logs-fhir.json";
+      mimeType = "application/json";
+    } else {
+      data = mockAuditLogs.map(log => 
+        `${log.timestamp},${log.user},${log.action},${log.resourceType},${log.resourceId},${log.outcome}`
+      ).join('\n');
+      filename = "audit-logs.csv";
+      mimeType = "text/csv";
+    }
+
+    const blob = new Blob([data], { type: mimeType });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'audit-logs.csv';
+    a.download = filename;
     a.click();
   };
 
@@ -130,10 +227,24 @@ export default function AuditLogs() {
       {/* Page Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold text-foreground">Audit Logs</h1>
-        <Button onClick={handleExportLogs} variant="outline" className="gap-2">
-          <Download className="h-4 w-4" />
-          Export Logs
-        </Button>
+        <div className="flex items-center gap-3">
+          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as "table" | "json")}>
+            <TabsList>
+              <TabsTrigger value="table" className="gap-2">
+                <TableIcon className="h-4 w-4" />
+                Table View
+              </TabsTrigger>
+              <TabsTrigger value="json" className="gap-2">
+                <FileText className="h-4 w-4" />
+                FHIR JSON
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <Button onClick={handleExportLogs} variant="outline" className="gap-2">
+            <Download className="h-4 w-4" />
+            Export {viewMode === "json" ? "FHIR JSON" : "CSV"}
+          </Button>
+        </div>
       </div>
 
       {/* Summary Charts */}
@@ -285,87 +396,111 @@ export default function AuditLogs() {
         </CardContent>
       </Card>
 
-      {/* Audit Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Audit Trail</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-left">Date & Time</TableHead>
-                  <TableHead>User</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Resource Type</TableHead>
-                  <TableHead>Resource ID</TableHead>
-                  <TableHead>Outcome</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {mockAuditLogs.map((log) => (
-                  <TableRow key={log.id} className="hover:bg-muted/50 transition-colors">
-                    <TableCell className="font-mono text-sm">
-                      {log.timestamp}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {log.user}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={getActionBadgeVariant(log.action)}>
-                        {log.action}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {log.resourceType}
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      <span 
-                        className="cursor-pointer hover:text-primary transition-colors"
-                        title={log.details}
-                      >
-                        {log.resourceId}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm">{getOutcomeIcon(log.outcome)}</span>
-                        <span className={log.outcome === "Success" ? "text-success" : "text-destructive"}>
-                          {log.outcome}
-                        </span>
-                      </div>
-                    </TableCell>
+      {/* Main Content - Table or JSON View */}
+      {viewMode === "table" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Audit Trail</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-left">Date & Time</TableHead>
+                    <TableHead>User</TableHead>
+                    <TableHead>Action</TableHead>
+                    <TableHead>Resource Type</TableHead>
+                    <TableHead>Resource ID</TableHead>
+                    <TableHead>Outcome</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {mockAuditLogs.map((log) => (
+                    <TableRow key={log.id} className="hover:bg-muted/50 transition-colors">
+                      <TableCell className="font-mono text-sm">
+                        {log.timestamp}
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        {log.user}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={getActionBadgeVariant(log.action)}>
+                          {log.action}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {log.resourceType}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">
+                        <span 
+                          className="cursor-pointer hover:text-primary transition-colors"
+                          title={log.details}
+                        >
+                          {log.resourceId}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm">{getOutcomeIcon(log.outcome)}</span>
+                          <span className={log.outcome === "Success" ? "text-success" : "text-destructive"}>
+                            {log.outcome}
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
 
-          {/* Pagination */}
-          <div className="p-4 border-t">
-            <Pagination>
-              <PaginationContent>
-                <PaginationItem>
-                  <PaginationPrevious href="#" />
-                </PaginationItem>
-                <PaginationItem>
-                  <PaginationLink href="#" isActive>1</PaginationLink>
-                </PaginationItem>
-                <PaginationItem>
-                  <PaginationLink href="#">2</PaginationLink>
-                </PaginationItem>
-                <PaginationItem>
-                  <PaginationLink href="#">3</PaginationLink>
-                </PaginationItem>
-                <PaginationItem>
-                  <PaginationNext href="#" />
-                </PaginationItem>
-              </PaginationContent>
-            </Pagination>
-          </div>
-        </CardContent>
-      </Card>
+            {/* Pagination */}
+            <div className="p-4 border-t">
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious href="#" />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink href="#" isActive>1</PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink href="#">2</PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink href="#">3</PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext href="#" />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">FHIR AuditEvent Resources</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="bg-muted rounded-lg p-4 max-h-[600px] overflow-auto">
+              <pre className="text-sm font-mono whitespace-pre-wrap">
+                {JSON.stringify({ 
+                  resourceType: "Bundle",
+                  id: "audit-events-bundle",
+                  type: "collection",
+                  timestamp: new Date().toISOString(),
+                  total: fhirAuditEvents.length,
+                  entry: fhirAuditEvents.map(event => ({ 
+                    resource: event 
+                  }))
+                }, null, 2)}
+              </pre>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
